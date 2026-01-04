@@ -38,7 +38,7 @@ console_formatter = ColoredFormatter(
 )
 console_handler.setFormatter(console_formatter)
 
-file_handler = logging.FileHandler("data/log/debug.log", mode="w")
+file_handler = logging.FileHandler("data/log/debug.log", mode="w", encoding="utf-8")
 file_formatter = logging.Formatter(
     "%(asctime)s [%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
@@ -103,7 +103,7 @@ def main():
         logger.info(f"RIP: {hex(rip)}, Registre: {reg}, \nFragments: {frags}")
         logger.info(f"--> Lib: {lib_name}, Delta: {delta}")
 
-        with open(result_log_path, "w") as file:
+        with open(result_log_path, "a") as file:
             reg_name = re.match(r"^[^\[]+", reg).group(0)
             file.write(f"Reg: {reg_name} Lib: {lib_name} Delta: {delta}\n")
     else:

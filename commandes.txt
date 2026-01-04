@@ -1,14 +1,32 @@
 Commandes à éxécuter sur pwsh dans le répertoire du projet ou se trouve se fichier
 
 --------------------------------------------------------------------------------------------------------
-Pour éxécuter le pintool TraceBuilder
+ÉTAPE 1 : Compiler les Pintools
+cd Pintools/MyPintool
+.\build.ps1
+
+--------------------------------------------------------------------------------------------------------
+ÉTAPE 2 : Éxécuter le pintool TraceBuilder (capture la trace d'exécution)
 
 $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
 $env:SSLKEYLOGFILE="C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Data\ssl-key.log"
 & "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\TraceBuilder.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
 
 --------------------------------------------------------------------------------------------------------------------------------
-Pour analyser le résultat et avoir le candidat :
+ÉTAPE 3 : Analyser le résultat et identifier le candidat :
 python analyseur/main.py -c scripts/pin_config.ini
 
 Penser à modifier le fichier key.log et y mettre la clé privée qui nous intéresse depuis ssl-key.log
+
+--------------------------------------------------------------------------------------------------------------------------------
+ÉTAPE 4 : Éxécuter PinGetName pour récupérer les infos sur l'instruction candidate
+
+Le fichier data/log/analyse.log doit contenir une ligne au format :
+    Reg: <NOM_REGISTRE> Lib: <NOM_DLL> Delta: <OFFSET_DECIMAL>
+Exemple :
+    Reg: REG_RCX Lib: libssl-3-x64.dll Delta: 123456
+
+$PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
+& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\PinGetName.dll" -- Cible/curl.exe https://www.google.com
+
+Le résultat sera dans data/log/getName.log
