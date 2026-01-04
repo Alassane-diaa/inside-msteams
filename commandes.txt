@@ -30,3 +30,20 @@ $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-wind
 & "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\PinGetName.dll" -- Cible/curl.exe https://www.google.com
 
 Le résultat sera dans data/log/getName.log
+
+--------------------------------------------------------------------------------------------------------------------------------
+ÉTAPE 5 : Éxécuter Backtracer pour capturer la backtrace au point d'extraction
+
+Le fichier data/log/getName.log (généré à l'étape 4) doit contenir :
+    Librairie: <NOM_DLL>
+    Delta: <OFFSET_DECIMAL>
+    Adresse: 0x<ADRESSE_HEX>
+    Fonction: `<NOM_FONCTION>`
+    Instruction: <DESASSEMBLAGE>
+
+$PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
+& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\Backtracer.dll" -- Cible/curl.exe https://www.google.com
+
+Le résultat sera dans :
+  - data/log/Backtrace.log       (backtrace complète avec pile d'appels)
+  - data/log/backtrace_leaks.log (logs de debug et octets extraits)
