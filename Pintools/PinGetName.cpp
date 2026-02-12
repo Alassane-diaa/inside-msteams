@@ -81,7 +81,7 @@ VOID ImageLoad(IMG img, VOID *v)
     std::string s = IMG_Name(img);
     if (s.find(libName) != std::string::npos)
     {
-        ADDRINT libAddress = IMG_EntryAddress(img);
+        ADDRINT libAddress = IMG_LowAddress(img);
         printf("[PV] Librairie chargée: %s\n", s.c_str());
         printf("[PV] Adresse de la librairie: 0x%lx\n", libAddress);
         insAddress = libAddress + delta;

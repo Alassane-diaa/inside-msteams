@@ -1,5 +1,6 @@
 #include "pin.H"
 #include <cctype>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -39,6 +40,7 @@ static size_t memory_size_to_read;
 // -----------------------------------------------------------------------------
 static std::vector<std::string> skip_functions;
 static std::vector<std::string> skip_libs;
+static std::vector<std::string> target_libs;  // Mode whitelist: SEULEMENT ces libs
 static std::vector<std::string> not_skip_libs;
 
 //------------------------------------------------------------------------------
@@ -213,9 +215,18 @@ bool load_register_config(const std::string &filename)
 
 bool load_filter_config(const std::string &filename)
 {
+  fprintf(stderr, ">>> load_filter_config START: %s\n", filename.c_str());
+  fflush(stderr);
+  
   std::ifstream config(filename);
   if (!config)
+  {
+    fprintf(stderr, ">>> FAILED to open config!\n");
+    fflush(stderr);
     return false;
+  }
+  fprintf(stderr, ">>> Config opened OK\n");
+  fflush(stderr);
 
   std::string line;
   bool in_filters = false;
@@ -242,6 +253,8 @@ bool load_filter_config(const std::string &filename)
 
     if (!in_filters)
       continue;
+
+    std::cerr << ">>> FILTER LINE: " << line << std::endl;
 
     if (line.rfind("FILTER_FUNCTION", 0) == 0)
     {
@@ -270,13 +283,41 @@ bool load_filter_config(const std::string &filename)
         skip_libs.push_back(trim(lib));
       }
     }
+
+    // Mode whitelist: SEULEMENT ces libs sont instrumentées
+    if (line.rfind("TARGET_LIB", 0) == 0)
+    {
+      std::cout << "DEBUG: Found TARGET_LIB line: " << line << std::endl;
+      auto eq = line.find('=');
+      if (eq == std::string::npos)
+        continue;
+      std::string list = trim(line.substr(eq + 1));
+      std::cout << "DEBUG: TARGET_LIB list = " << list << std::endl;
+      std::istringstream ss(list);
+      std::string lib;
+      while (std::getline(ss, lib, ','))
+      {
+        std::cout << "DEBUG: Adding target lib: " << trim(lib) << std::endl;
+        target_libs.push_back(trim(lib));
+      }
+    }
   }
   std::cout << std::endl
-            << "Librairies ignorées :" << std::endl;
+            << "Librairies ignorées (" << skip_libs.size() << ") | Target libs: " << target_libs.size() << std::endl;
   for (auto lib_name : skip_libs)
   {
     std::cout << "\t" << lib_name << std::endl;
   }
+  if (!target_libs.empty())
+  {
+    std::cout << std::endl
+              << "Mode WHITELIST actif - SEULEMENT ces libs:" << std::endl;
+    for (auto lib_name : target_libs)
+    {
+      std::cout << "\t" << lib_name << std::endl;
+    }
+  }
+  std::cerr << ">>> target_libs count: " << target_libs.size() << std::endl;
   return true;
 }
 
@@ -390,15 +431,40 @@ VOID Instructions(INS ins, VOID *v)
     {
       std::string img_name = IMG_Name(img);
       std::string img_filename = get_filename(img_name);
-      for (auto &skip : skip_libs)
+      
+      // MODE WHITELIST: Si target_libs est défini, on n'instrumente QUE ces libs
+      if (!target_libs.empty())
       {
-        std::string skip_lower = skip;
-        for (auto &c : skip_lower) c = std::tolower(c);
-        if (img_filename == skip_lower || img_filename.find(skip_lower) != std::string::npos)
+        bool is_target = false;
+        for (auto &target : target_libs)
         {
-          return;
+          std::string target_lower = target;
+          for (auto &c : target_lower) c = std::tolower(c);
+          if (img_filename == target_lower || img_filename.find(target_lower) != std::string::npos)
+          {
+            is_target = true;
+            break;
+          }
+        }
+        if (!is_target)
+        {
+          return;  // Ignorer tout ce qui n'est pas dans target_libs
         }
       }
+      else
+      {
+        // Mode blacklist classique (FILTER_LIB)
+        for (auto &skip : skip_libs)
+        {
+          std::string skip_lower = skip;
+          for (auto &c : skip_lower) c = std::tolower(c);
+          if (img_filename == skip_lower || img_filename.find(skip_lower) != std::string::npos)
+          {
+            return;
+          }
+        }
+      }
+      
       bool already_skipped = false;
       for (auto &skip : not_skip_libs)
       {
@@ -410,6 +476,14 @@ VOID Instructions(INS ins, VOID *v)
       if (!already_skipped)
       {
         not_skip_libs.push_back(img_name);
+      }
+    }
+    else
+    {
+      // Image invalide et mode whitelist actif => ignorer
+      if (!target_libs.empty())
+      {
+        return;
       }
     }
   }
