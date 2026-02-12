@@ -80,7 +80,7 @@ def main():
     elif not "REG_RIP" in register_list:
         register_list = ["REG_RIP"] + register_list
 
-    secret = init_secret(cmd, endian)
+    secret = init_secret(cmd, endian, chunk_size)
     logger.debug(f"[MAIN] Secret ({len(secret)} o):\n {secret}")
 
     logger.info(f"Analyse du fichier {binary_file_path}...")

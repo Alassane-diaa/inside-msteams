@@ -231,6 +231,38 @@ def filter_first_completion(candidates, secret, chunk_size, pinlog_file_path = N
         logger.info(f"Candidat ({hex(rip)}, {reg}) complété à la ligne {completion_line}")
 
     return best[0], best[1]
+
+def filter_partial(candidates, secret, chunk_size, min_chunks=1, pinlog_file_path=None):
+    """
+    Retourne tous les candidats ayant au moins min_chunks fragments du secret.
+    Trie par nombre de fragments décroissant.
+    """
+    required_count = len(secret) // chunk_size
+    results = []
+
+    for (rip, reg), values in candidates.items():
+        indices = {i for i, _ in values}
+        count = len(indices)
+        
+        if count >= min_chunks:
+            if pinlog_file_path:
+                lib_name, delta = locate_library(rip, parse_loaded_libraries(pinlog_file_path))
+                if lib_name:
+                    logger.info(f"Candidat partiel : ({hex(rip)}, {reg}), {count}/{required_count} fragments, lib: {lib_name}, delta: {hex(delta)}")
+                else:
+                    logger.info(f"Candidat partiel : ({hex(rip)}, {reg}), {count}/{required_count} fragments")
+            else:
+                logger.info(f"Candidat partiel : ({hex(rip)}, {reg}), {count}/{required_count} fragments")
+            results.append(((rip, reg), values, count))
+    
+    if not results:
+        return None, None
+    
+    # Trier par nombre de fragments décroissant et retourner le meilleur
+    results.sort(key=lambda x: x[2], reverse=True)
+    best = results[0]
+    return best[0], best[1]
+
 # -----------------------------------------------------------------------------
 # Mapping des différentes méthodes de filtrage des candidats
 # -----------------------------------------------------------------------------
@@ -242,6 +274,7 @@ MODES = {
     "closest_address":      filter_closest_address,
     "min_pattern":          filter_min_pattern,
     "first_completion":     filter_first_completion,
+    "partial":              filter_partial,
 }
 
 def get_filter(mode: str):
@@ -263,5 +296,8 @@ def filter_candidates(candidates, secret, chunk_size, filter_method, filter_opti
     elif filter_method == "closest_address":
         addr = parse_target_addr(filter_option or "0")
         return filter_func(candidates, secret, chunk_size, addr, pinlog_file_path = pinlog_file_path)
+    elif filter_method == "partial":
+        min_chunks = int(filter_option) if filter_option else 1
+        return filter_func(candidates, secret, chunk_size, min_chunks, pinlog_file_path = pinlog_file_path)
     else:
         return filter_func(candidates, secret, chunk_size, pinlog_file_path = pinlog_file_path)

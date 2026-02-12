@@ -163,7 +163,7 @@ def init_registers(register_in_args, memory_size):
     return register_list
 
 
-def init_secret(cmd, endianness):
+def init_secret(cmd, endianness, chunk_size=8):
     try:
         result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
     except subprocess.CalledProcessError as e:
@@ -189,8 +189,18 @@ def init_secret(cmd, endianness):
 
     secret_array = np.frombuffer(secret_bytes, dtype=np.ubyte)
 
+    # Le secret SSL est en big endian (format standard crypto)
+    # La trace x86 est en little endian
+    # Si l'utilisateur spécifie "little", on convertit le secret de big vers little endian
     if endianness == "little":
-        secret_array = np.flip(secret_array)
+        # Inverser chaque chunk pour convertir de big endian vers little endian (format trace x86)
+        remainder = len(secret_array) % chunk_size
+        if remainder != 0:
+            padding = chunk_size - remainder
+            secret_array = np.pad(secret_array, (0, padding), mode='constant', constant_values=0)
+        secret_array = secret_array.reshape(-1, chunk_size)
+        secret_array = np.flip(secret_array, axis=1)
+        secret_array = secret_array.flatten()
 
     logger.debug(f"[init_secret] Secret final ({len(secret_array)} octets):\n {secret_array}")
 
