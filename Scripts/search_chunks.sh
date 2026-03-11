@@ -11,49 +11,68 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-KEYLOG="${1:-data/log/sslkeys.log}"
+KEYLOG="${1:-data/key.log}"
 TRACE="${2:-data/log/trace.binary}"
-CHUNK_SIZE=4  # bytes (8 hex characters)
+CHUNK_SIZE=8  # bytes (16 hex characters)
+RESULTS_FILE=$(mktemp)
+
+# Cleanup on exit
+trap "rm -f $RESULTS_FILE" EXIT
 
 echo -e "${BLUE}=== Secret Chunk Hunter ===${NC}\n"
 
-# Extract secret from key.log
+# Extract secret from key.log (already just the hex string, 96 chars)
 echo -e "${YELLOW}Step 1: Extracting secret from $KEYLOG${NC}"
-secret=$(awk '{print $3}' "$KEYLOG" | tr -d '\n' | head -c 128)  # First secret, max 64 bytes
+secret=$(cat "$KEYLOG" | tr -d '\n\r\t ')
 secret_bytes=$((${#secret} / 2))
-echo "Secret (first 64 bytes): $secret"
+echo "Secret: ${secret:0:64}..."
 echo "Total bytes: $secret_bytes"
 echo ""
 
-# Function to reverse bytes for little-endian (with spaces)
-reverse_bytes() {
+# Function to convert chunk to hexdump format (16-bit words, little-endian)
+# Example: 50154774fe815d56 -> "1550 4774 81fe 565d"
+chunk_to_hexdump_format() {
     local hex="$1"
-    echo "$hex" | sed 's/../& /g' | awk '{for(i=NF;i>0;i--) printf "%s ",$i}' | sed 's/ $//'
+    local result=""
+    
+    # Process each pair of bytes (4 hex chars = 1 word = 2 bytes)
+    for ((i=0; i<${#hex}; i+=4)); do
+        local byte1="${hex:i:2}"
+        local byte2="${hex:i+2:2}"
+        # Reverse the two bytes for little-endian
+        local word="${byte2}${byte1}"
+        result="${result}${word} "
+    done
+    
+    # Remove trailing space
+    echo "${result% }"
 }
 
 # Function to search in trace
 search_chunk() {
     local chunk_num=$1
-    local chunk_be=$2
-    local chunk_le=$3
+    local chunk_hex=$2
+    local chunk_hexdump=$3
     
     echo -e "${GREEN}Chunk #$chunk_num (bytes $((chunk_num * CHUNK_SIZE))-$((chunk_num * CHUNK_SIZE + CHUNK_SIZE - 1))):${NC}"
-    echo "  Big-endian:    $chunk_be"
-    echo "  Little-endian: $chunk_le"
+    echo "  Original:      $chunk_hex"
+    echo "  Hexdump format: $chunk_hexdump"
     
-    # Search in hexdump using hd (hexdump canonical format)
-    # hd format: 00000000  fe f6 a9 a3 f9 7f 00 00  01 00 00 00 00 00 00 00  |................|
-    # We search only in the hex part (between offset and ASCII)
-    local matches=$(hd "$TRACE" 2>/dev/null | grep -i "$chunk_le" | grep -v "^[0-9a-f]*$chunk_le" | head -n 5)
+    # Search in hexdump using hexdump
+    local matches=$(hexdump "$TRACE" 2>/dev/null | grep -i "$chunk_hexdump" | head -n 20)
     
     if [ -n "$matches" ]; then
         echo -e "  ${RED}FOUND in trace:${NC}"
         echo "$matches" | while read line; do
             # Parse offset to calculate fragment number
-            offset=$(echo "$line" | awk '{print $1}' | tr -d ':')
+            offset=$(echo "$line" | awk '{print $1}')
             offset_dec=$((16#$offset))
             fragment_num=$((offset_dec / 64))
             byte_in_frag=$((offset_dec % 64))
+            
+            # Extract RIP from the trace at this fragment
+            rip_offset=$((fragment_num * 64))
+            rip=$(xxd -s $rip_offset -l 8 -p "$TRACE" 2>/dev/null | sed 's/\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)\(..\)/\8\7\6\5\4\3\2\1/')
             
             # Determine which register/memory
             if [ $byte_in_frag -lt 8 ]; then
@@ -66,11 +85,13 @@ search_chunk() {
                 location="RDI"
             else
                 mem_offset=$((byte_in_frag - 32))
-                location="MEMORY[${mem_offset}]"
+                location="MEMORY[$mem_offset]"
             fi
             
-            echo "    Fragment #$fragment_num, offset $offset_dec, in $location"
-            echo "    $line"
+            echo "    Frag #$fragment_num, RIP: 0x$rip, in $location"
+            
+            # Save to results file: chunk_num|rip|location|fragment_num
+            echo "$chunk_num|$rip|$location|$fragment_num" >> "$RESULTS_FILE"
         done
     else
         echo "  Not found"
@@ -89,19 +110,173 @@ echo ""
 for i in $(seq 0 $((num_chunks - 1))); do
     # Extract chunk (16 hex chars = 8 bytes)
     start=$((i * CHUNK_SIZE * 2))
-    chunk_be="${secret:$start:$((CHUNK_SIZE * 2))}"
+    chunk_hex="${secret:$start:$((CHUNK_SIZE * 2))}"
     
     # Skip if chunk is all zeros (common, not interesting)
-    if [ "$chunk_be" = "0000000000000000" ]; then
+    if [ "$chunk_hex" = "0000000000000000" ]; then
         continue
     fi
     
-    # Convert to little-endian
-    chunk_le=$(reverse_bytes "$chunk_be")
+    # Convert to hexdump format (2 x 16-bit words, little-endian)
+    chunk_hexdump=$(chunk_to_hexdump_format "$chunk_hex")
     
     # Search this chunk
-    search_chunk $i "$chunk_be" "$chunk_le"
+    search_chunk $i "$chunk_hex" "$chunk_hexdump"
 done
+
+echo -e "${BLUE}=== Candidate Analysis ===${NC}"
+echo ""
+
+# Check if we have any results
+if [ ! -s "$RESULTS_FILE" ]; then
+    echo "No chunks found in trace."
+    exit 0
+fi
+
+# Count total chunks expected (excluding zeros)
+total_chunks=0
+for i in $(seq 0 $((num_chunks - 1))); do
+    start=$((i * CHUNK_SIZE * 2))
+    chunk_hex="${secret:$start:$((CHUNK_SIZE * 2))}"
+    if [ "$chunk_hex" != "0000000000000000" ]; then
+        total_chunks=$((total_chunks + 1))
+    fi
+done
+
+echo "Total non-zero chunks in secret: $total_chunks"
+echo ""
+
+# Group results by (RIP, register) and find candidates covering all chunks
+declare -A candidates
+declare -A candidate_chunks
+declare -A candidate_fragments
+
+while IFS='|' read -r chunk_num rip location fragment_num; do
+    key="${rip}:${location}"
+    
+    # Track unique chunks covered
+    if [ -z "${candidate_chunks[$key]}" ]; then
+        candidate_chunks[$key]="$chunk_num"
+    else
+        # Check if this chunk is already in the list
+        if ! echo "${candidate_chunks[$key]}" | grep -q "\b$chunk_num\b"; then
+            candidate_chunks[$key]="${candidate_chunks[$key]} $chunk_num"
+        fi
+    fi
+    
+    # Count total occurrences
+    if [ -z "${candidates[$key]}" ]; then
+        candidates[$key]=1
+    else
+        candidates[$key]=$((${candidates[$key]} + 1))
+    fi
+    
+    # Track fragment numbers
+    if [ -z "${candidate_fragments[$key]}" ]; then
+        candidate_fragments[$key]="$fragment_num"
+    else
+        candidate_fragments[$key]="${candidate_fragments[$key]} $fragment_num"
+    fi
+done < "$RESULTS_FILE"
+
+# Find candidates that cover all chunks
+echo -e "${YELLOW}Complete Candidates (covering all chunks):${NC}"
+echo ""
+
+best_score=999999
+best_candidate=""
+best_reg=""
+reg_priority_MEMORY32=10
+reg_priority_RAX=1
+reg_priority_RDI=2
+reg_priority_RSI=3
+
+complete_found=false
+
+for key in "${!candidates[@]}"; do
+    rip=$(echo "$key" | cut -d: -f1)
+    location=$(echo "$key" | cut -d: -f2)
+    
+    # Count unique chunks covered
+    num_covered=$(echo "${candidate_chunks[$key]}" | wc -w)
+    
+    # Only consider candidates covering all chunks
+    if [ $num_covered -eq $total_chunks ]; then
+        complete_found=true
+        num_occurrences=${candidates[$key]}
+        
+        # Calculate score based on register priority
+        score=100
+        case "$location" in
+            "RAX") score=$reg_priority_RAX ;;
+            "RDI") score=$reg_priority_RDI ;;
+            "RSI") score=$reg_priority_RSI ;;
+            MEMORY*) score=$reg_priority_MEMORY32 ;;
+        esac
+        
+        echo -e "${GREEN}✓${NC} RIP: 0x$rip, Register: $location"
+        echo "  Chunks covered: $num_covered/$total_chunks (100%)"
+        echo "  Total occurrences: $num_occurrences"
+        echo "  Priority score: $score"
+        echo ""
+        
+        # Track best candidate based on priority score
+        if [ $score -lt $best_score ]; then
+            best_score=$score
+            best_candidate="0x$rip"
+            best_reg="$location"
+        fi
+    fi
+done
+
+if [ "$complete_found" = false ]; then
+    echo "  None found."
+    echo ""
+fi
+
+# Show partial candidates
+echo -e "${YELLOW}Partial Candidates (incomplete coverage):${NC}"
+echo ""
+
+partial_found=false
+
+for key in "${!candidates[@]}"; do
+    rip=$(echo "$key" | cut -d: -f1)
+    location=$(echo "$key" | cut -d: -f2)
+    
+    # Count unique chunks covered
+    num_covered=$(echo "${candidate_chunks[$key]}" | wc -w)
+    
+    # Show candidates with partial coverage
+    if [ $num_covered -lt $total_chunks ] && [ $num_covered -gt 0 ]; then
+        partial_found=true
+        num_occurrences=${candidates[$key]}
+        coverage_pct=$((num_covered * 100 / total_chunks))
+        
+        echo -e "${YELLOW}◐${NC} RIP: 0x$rip, Register: $location"
+        echo "  Chunks covered: $num_covered/$total_chunks (${coverage_pct}%)"
+        echo "  Total occurrences: $num_occurrences"
+        echo "  Missing chunks: $((total_chunks - num_covered))"
+        echo ""
+    fi
+done
+
+if [ "$partial_found" = false ]; then
+    echo "  None found."
+    echo ""
+fi
+
+if [ -n "$best_candidate" ]; then
+    echo -e "${RED}=== BEST CANDIDATE ===${NC}"
+    echo "RIP: $best_candidate"
+    echo "Register: $best_reg"
+    echo "Priority score: $best_score"
+    echo ""
+    echo "This is the most likely instruction manipulating the secret!"
+else
+    echo -e "${YELLOW}No candidate covers all secret chunks.${NC}"
+    echo "Partial matches found, but incomplete coverage."
+fi
 
 echo -e "${BLUE}=== Search Complete ===${NC}"
 echo ""

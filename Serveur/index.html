@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Serveur HTTPS Test</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status {
+            background: rgba(76, 175, 80, 0.3);
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #4CAF50;
+        }
+        .info {
+            background: rgba(33, 150, 243, 0.3);
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #2196F3;
+        }
+        ul {
+            line-height: 1.8;
+        }
+        code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔒 Serveur HTTPS avec SSLKEYLOGFILE</h1>
+        
+        <div class="status">
+            <h2>✅ Statut du serveur</h2>
+            <p><strong>Le serveur HTTPS fonctionne correctement !</strong></p>
+            <p>Connexion sécurisée établie via TLS/SSL</p>
+        </div>
+        
+        <div class="info">
+            <h2>📋 Informations</h2>
+            <ul>
+                <li><strong>Protocole:</strong> HTTPS (HTTP over TLS/SSL)</li>
+                <li><strong>Port:</strong> 4443</li>
+                <li><strong>Certificat:</strong> Auto-signé (localhost)</li>
+                <li><strong>Capture des clés:</strong> Activée (SSLKEYLOGFILE)</li>
+            </ul>
+        </div>
+        
+        <div class="info">
+            <h2>🔑 Capture des clés TLS</h2>
+            <p>Les clés de session TLS sont enregistrées dans <code>server_keys.log</code></p>
+            <p>Utilisez ce fichier avec Wireshark pour déchiffrer le trafic HTTPS capturé.</p>
+            
+            <h3>Configuration Wireshark:</h3>
+            <ol>
+                <li>Edit → Preferences → Protocols → TLS</li>
+                <li>(Pre)-Master-Secret log filename: <code>server_keys.log</code></li>
+                <li>Le trafic HTTPS sera automatiquement déchiffré</li>
+            </ol>
+        </div>
+        
+        <div class="info">
+            <h2>🧪 Tester avec curl</h2>
+            <p>Pour tester et capturer les clés côté client:</p>
+            <pre><code>$env:SSLKEYLOGFILE = "client_keys.log"
+curl -k https://localhost:4443/</code></pre>
+        </div>
+    </div>
+</body>
+</html>

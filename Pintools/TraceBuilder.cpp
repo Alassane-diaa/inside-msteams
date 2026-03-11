@@ -43,6 +43,9 @@ static std::vector<std::string> skip_libs;
 static std::vector<std::string> target_libs;  // Mode whitelist: SEULEMENT ces libs
 static std::vector<std::string> not_skip_libs;
 
+// Mode de filtrage : "whitelist", "blacklist", "none"
+static std::string filter_mode = "none"; // valeur par défaut
+
 //------------------------------------------------------------------------------
 // Map from string names in config to PIN REG identifiers
 //------------------------------------------------------------------------------
@@ -215,18 +218,12 @@ bool load_register_config(const std::string &filename)
 
 bool load_filter_config(const std::string &filename)
 {
-  fprintf(stderr, ">>> load_filter_config START: %s\n", filename.c_str());
-  fflush(stderr);
-  
   std::ifstream config(filename);
   if (!config)
   {
-    fprintf(stderr, ">>> FAILED to open config!\n");
-    fflush(stderr);
+    std::cerr << "Erreur : impossible d'ouvrir le fichier de configuration '" << filename << "'." << std::endl;
     return false;
   }
-  fprintf(stderr, ">>> Config opened OK\n");
-  fflush(stderr);
 
   std::string line;
   bool in_filters = false;
@@ -254,7 +251,25 @@ bool load_filter_config(const std::string &filename)
     if (!in_filters)
       continue;
 
-    std::cerr << ">>> FILTER LINE: " << line << std::endl;
+    if (line.rfind("MODE", 0) == 0)
+    {
+      auto eq = line.find('=');
+      if (eq != std::string::npos)
+      {
+        std::string mode = trim(line.substr(eq + 1));
+        // Convertir en minuscules
+        for (auto &c : mode) c = std::tolower(c);
+        if (mode == "whitelist" || mode == "blacklist" || mode == "none")
+        {
+          filter_mode = mode;
+        }
+        else
+        {
+          std::cerr << "Avertissement : mode de filtrage invalide '" << mode
+                    << "'. Valeurs autorisées : whitelist, blacklist, none." << std::endl;
+        }
+      }
+    }
 
     if (line.rfind("FILTER_FUNCTION", 0) == 0)
     {
@@ -287,37 +302,33 @@ bool load_filter_config(const std::string &filename)
     // Mode whitelist: SEULEMENT ces libs sont instrumentées
     if (line.rfind("TARGET_LIB", 0) == 0)
     {
-      std::cout << "DEBUG: Found TARGET_LIB line: " << line << std::endl;
       auto eq = line.find('=');
       if (eq == std::string::npos)
         continue;
       std::string list = trim(line.substr(eq + 1));
-      std::cout << "DEBUG: TARGET_LIB list = " << list << std::endl;
       std::istringstream ss(list);
       std::string lib;
       while (std::getline(ss, lib, ','))
       {
-        std::cout << "DEBUG: Adding target lib: " << trim(lib) << std::endl;
         target_libs.push_back(trim(lib));
       }
     }
   }
-  std::cout << std::endl
-            << "Librairies ignorées (" << skip_libs.size() << ") | Target libs: " << target_libs.size() << std::endl;
-  for (auto lib_name : skip_libs)
+  std::cout << "[TraceBuilder] Mode de filtrage : " << filter_mode;
+  if (filter_mode == "whitelist")
   {
-    std::cout << "\t" << lib_name << std::endl;
-  }
-  if (!target_libs.empty())
-  {
-    std::cout << std::endl
-              << "Mode WHITELIST actif - SEULEMENT ces libs:" << std::endl;
-    for (auto lib_name : target_libs)
+    std::cout << " -> libs: ";
+    for (size_t i = 0; i < target_libs.size(); ++i)
     {
-      std::cout << "\t" << lib_name << std::endl;
+      if (i) std::cout << ", ";
+      std::cout << target_libs[i];
     }
   }
-  std::cerr << ">>> target_libs count: " << target_libs.size() << std::endl;
+  else if (filter_mode == "blacklist")
+  {
+    std::cout << " -> " << skip_libs.size() << " libs ignorées";
+  }
+  std::cout << std::endl;
   return true;
 }
 
@@ -432,9 +443,10 @@ VOID Instructions(INS ins, VOID *v)
       std::string img_name = IMG_Name(img);
       std::string img_filename = get_filename(img_name);
       
-      // MODE WHITELIST: Si target_libs est défini, on n'instrumente QUE ces libs
-      if (!target_libs.empty())
+      // Application du mode de filtrage
+      if (filter_mode == "whitelist")
       {
+        // MODE WHITELIST: on n'instrumente QUE les libs de target_libs
         bool is_target = false;
         for (auto &target : target_libs)
         {
@@ -451,9 +463,9 @@ VOID Instructions(INS ins, VOID *v)
           return;  // Ignorer tout ce qui n'est pas dans target_libs
         }
       }
-      else
+      else if (filter_mode == "blacklist")
       {
-        // Mode blacklist classique (FILTER_LIB)
+        // MODE BLACKLIST: on ignore les libs de skip_libs
         for (auto &skip : skip_libs)
         {
           std::string skip_lower = skip;
@@ -464,6 +476,7 @@ VOID Instructions(INS ins, VOID *v)
           }
         }
       }
+      // MODE NONE: aucun filtrage, on instrumente tout
       
       bool already_skipped = false;
       for (auto &skip : not_skip_libs)
@@ -481,7 +494,7 @@ VOID Instructions(INS ins, VOID *v)
     else
     {
       // Image invalide et mode whitelist actif => ignorer
-      if (!target_libs.empty())
+      if (filter_mode == "whitelist")
       {
         return;
       }

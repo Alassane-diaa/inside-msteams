@@ -1,16 +1,17 @@
 Commandes à éxécuter sur pwsh dans le répertoire du projet ou se trouve se fichier
+⚠️  Ce fichier décrit le process pour curl + OpenSSL 3.x — pour curl SChannel voir SCHANNEL_PROCESS.md
 
 --------------------------------------------------------------------------------------------------------
 ÉTAPE 1 : Compiler les Pintools
 cd Pintools/MyPintool
-.\build.ps1
+.\build.bat
 
 --------------------------------------------------------------------------------------------------------
 ÉTAPE 2 : Éxécuter le pintool TraceBuilder (capture la trace d'exécution)
 
 $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-$env:SSLKEYLOGFILE="C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Data\ssl-key.log"
-& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\TraceBuilder.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
+$env:SSLKEYLOGFILE="C:\Users\diala\OneDrive\Bureau\Projet 2A\Reprise\inside-msteams\Data\ssl-key.log"
+& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\Reprise\inside-msteams\Pintools\MyPintool\obj-intel64\TraceBuilder.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
 
 --------------------------------------------------------------------------------------------------------------------------------
 ÉTAPE 3 : Analyser le résultat et identifier le candidat :
@@ -27,7 +28,7 @@ Exemple :
     Reg: REG_RCX Lib: libssl-3-x64.dll Delta: 123456
 
 $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\PinGetName.dll" -- Cible/curl.exe https://www.google.com
+& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\Reprise\inside-msteams\Pintools\MyPintool\obj-intel64\PinGetName.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
 
 Le résultat sera dans data/log/getName.log
 
@@ -42,7 +43,7 @@ Le fichier data/log/getName.log (généré à l'étape 4) doit contenir :
     Instruction: <DESASSEMBLAGE>
 
 $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\On reprend\inside-msteams\Pintools\MyPintool\obj-intel64\Backtracer.dll" -- Cible/curl.exe https://www.google.com
+& "$PIN_TOOL\pin.exe" -t "C:\Users\diala\OneDrive\Bureau\Projet 2A\Reprise\inside-msteams\Pintools\MyPintool\obj-intel64\Backtracer.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
 
 Le résultat sera dans :
   - data/log/Backtrace.log       (backtrace complète avec pile d'appels)
@@ -103,7 +104,7 @@ WORKFLOW COMPLET (Pour une démo)
 
 # 2. Exécuter Backtracer
 $PIN_TOOL="C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\Backtracer.dll" -- Cible/curl.exe https://www.google.com
+& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\Backtracer.dll" -config Scripts/pin_config.ini -- Cible/curl.exe https://www.google.com
 
 # 3. Récupérer le Client Random depuis Wireshark (ClientHello → Random)
 

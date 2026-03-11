@@ -1,3 +1,6 @@
 Data
 Pintools/MyPintool/obj-intel64
 Cible
+*.pyc
+*.crt
+*.key

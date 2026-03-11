@@ -16,6 +16,7 @@
  */
 
 #include <atomic>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -26,11 +27,127 @@
 
 #include "pin.H"
 
+//------------------------------------------------------------------------------
+// Config KNOB
+//------------------------------------------------------------------------------
+KNOB<std::string> KnobConfigFile(KNOB_MODE_WRITEONCE, "pintool",
+                                 "config", "pin_config.ini",
+                                 "Path to the PIN tool configuration file");
+
+//------------------------------------------------------------------------------
+// Filtering globals
+//------------------------------------------------------------------------------
+static std::vector<std::string> skip_libs;
+static std::vector<std::string> target_libs;
+static std::string filter_mode = "blacklist"; // défaut sûr
+
+//------------------------------------------------------------------------------
+// Helpers
+//------------------------------------------------------------------------------
+static std::string bt_trim(const std::string &s)
+{
+    const auto start = s.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return {};
+    const auto end = s.find_last_not_of(" \t\r\n");
+    return s.substr(start, end - start + 1);
+}
+
+static std::string bt_get_filename(const std::string &path)
+{
+    auto pos = path.find_last_of("\\/");
+    std::string f = (pos == std::string::npos) ? path : path.substr(pos + 1);
+    for (auto &c : f) c = std::tolower(c);
+    return f;
+}
+
+/** Charge MODE, FILTER_LIB et TARGET_LIB depuis la section [FILTERS] du config. */
+static void load_filter_config_backtracer(const std::string &filename)
+{
+    std::ifstream cfg(filename);
+    if (!cfg) return;
+    std::string line;
+    bool in_filters = false;
+    while (std::getline(cfg, line))
+    {
+        auto p = line.find('#');
+        if (p != std::string::npos) line = line.substr(0, p);
+        line = bt_trim(line);
+        if (line.empty()) continue;
+        if (line == "[FILTERS]") { in_filters = true; continue; }
+        if (line.front() == '[' && line.back() == ']') { in_filters = false; continue; }
+        if (!in_filters) continue;
+        if (line.rfind("MODE", 0) == 0)
+        {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string mode = bt_trim(line.substr(eq + 1));
+            for (auto &c : mode) c = std::tolower(c);
+            if (mode == "whitelist" || mode == "blacklist" || mode == "none")
+                filter_mode = mode;
+        }
+        if (line.rfind("FILTER_LIB", 0) == 0)
+        {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::istringstream ss(bt_trim(line.substr(eq + 1)));
+            std::string lib;
+            while (std::getline(ss, lib, ','))
+                skip_libs.push_back(bt_trim(lib));
+        }
+        if (line.rfind("TARGET_LIB", 0) == 0)
+        {
+            auto eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::istringstream ss(bt_trim(line.substr(eq + 1)));
+            std::string lib;
+            while (std::getline(ss, lib, ','))
+                target_libs.push_back(bt_trim(lib));
+        }
+    }
+    std::cout << "[Backtracer] Mode de filtrage : " << filter_mode;
+    if (filter_mode == "blacklist") std::cout << " -> " << skip_libs.size() << " libs ignorées";
+    else if (filter_mode == "whitelist") { std::cout << " -> libs: "; for (size_t i=0;i<target_libs.size();++i){if(i)std::cout<<", ";std::cout<<target_libs[i];} }
+    std::cout << std::endl;
+}
+
+/** Forward decl – défini plus bas dans le fichier. */
+static std::string libName;
+
+/**
+ * @brief Retourne true si l'image doit être ignorée pour le suivi call/ret.
+ *        La lib cible (libName) est toujours instrumentée.
+ */
+static bool should_skip_img(const std::string &imgName)
+{
+    std::string fname = bt_get_filename(imgName);
+    // Toujours instrumenter la lib cible
+    std::string target_fname = bt_get_filename(libName);
+    if (!target_fname.empty() && fname.find(target_fname) != std::string::npos)
+        return false;
+    if (filter_mode == "whitelist")
+    {
+        for (auto &t : target_libs)
+        {
+            std::string tl = t; for (auto &c : tl) c = std::tolower(c);
+            if (fname == tl || fname.find(tl) != std::string::npos) return false;
+        }
+        return true;
+    }
+    if (filter_mode == "blacklist")
+    {
+        for (auto &s : skip_libs)
+        {
+            std::string sl = s; for (auto &c : sl) c = std::tolower(c);
+            if (fname == sl || fname.find(sl) != std::string::npos) return true;
+        }
+    }
+    return false;
+}
+
 /** Flux tampon global pour accumuler les lignes de log avant écriture finale. */
 static std::stringstream key_out;
 static std::stringstream log_out;
-/** Nom de la bibliothèque ciblée, tel que lu dans getName.log. */
-static std::string libName;
+// libName est déclaré dans le bloc de filtrage plus haut
 
 /** Nom de la fonction cible (pour info). */
 static std::string funName;
@@ -47,8 +164,6 @@ static ADDRINT delta = 0;
 /** Flag atomique pour n’enregistrer la backtrace qu’une seule fois. */
 static std::atomic<bool> logged{false};
 
-/** TLS key pour stocker une pile d’appels par thread. */
-static TLS_KEY tlsKey;
 
 /** Verrou PIN pour la sortie (serialisation des écritures). */
 static PIN_LOCK ioLock;
@@ -60,55 +175,6 @@ static std::vector<char *> gInstList;
 static const int SECRET_LEN = 48;
 static std::vector<uint8_t> gLeakedBytes;
 
-/**
- * @struct Frame
- * @brief Informations capturées pour chaque appel de fonction.
- */
-struct Frame
-{
-    std::string funcName; /**< Nom de la fonction appelée. */
-    std::string libName;  /**< Nom de la librairie contenant la fonction. */
-    ADDRINT regs[7];      /**< Valeurs des registres RDI, RSI, RDX, RCX, R8, R9, R10. */
-};
-
-/**
- * @struct CallStack
- * @brief Représente une pile d’appels (LIFO) pour un thread donné.
- */
-struct CallStack
-{
-    std::vector<Frame> stack;
-};
-
-/**
- * @brief Récupère le CallStack associé au thread donné.
- * @param tid Identifiant du thread.
- * @return Pointeur vers le CallStack du thread.
- */
-static CallStack *GetTlsStack(THREADID tid)
-{
-    return static_cast<CallStack *>(PIN_GetThreadData(tlsKey, tid));
-}
-
-/**
- * @brief Callback PIN appelé à la création d’un thread.
- *        Alloue et initialise la pile d’appels.
- */
-VOID ThreadStart(THREADID tid, CONTEXT *, INT32, VOID *)
-{
-    CallStack *cs = new CallStack();
-    PIN_SetThreadData(tlsKey, cs, tid);
-}
-
-/**
- * @brief Callback PIN appelé à la terminaison d’un thread.
- *        Libère la pile d’appels.
- */
-VOID ThreadFini(THREADID tid, const CONTEXT *, INT32, VOID *)
-{
-    CallStack *cs = static_cast<CallStack *>(PIN_GetThreadData(tlsKey, tid));
-    delete cs;
-}
 
 /**
  * @brief Lit le fichier d’analyse pour initialiser libName, delta, insAddress, funName, insName.
@@ -213,164 +279,177 @@ bool ReadMem(ADDRINT addr, T &out)
     return (copied == sizeof(T));
 }
 
-/**
- * @brief Callback d’instrumentation de chaque appel de fonction.
- *        Pousse un Frame sur la pile locale du thread.
- */
-VOID OnCall(ADDRINT target, THREADID tid, CONTEXT *ctx)
-{
-    // log_out << "[Backtracer] " << __func__ << " tid=" << tid << std::endl;
-    PIN_LockClient();
-    RTN rtn = RTN_FindByAddress(target);
-    IMG img = IMG_FindByAddress(target);
-
-    Frame f;
-    f.funcName = RTN_Valid(rtn) ? RTN_Name(rtn) : "<unknown>";
-    f.libName = IMG_Valid(img) ? IMG_Name(img) : "<unknown>";
-    PIN_UnlockClient();
-
-    // RDI, RSI, RDX, RCX, R8, R9, R10
-    f.regs[0] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RDI);
-    f.regs[1] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RSI);
-    f.regs[2] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RDX);
-    f.regs[3] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RCX);
-    f.regs[4] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_R8);
-    f.regs[5] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_R9);
-    f.regs[6] = PIN_GetContextReg(ctx, LEVEL_BASE::REG_R10);
-
-    GetTlsStack(tid)->stack.push_back(f);
-}
 
 /**
- * @brief Callback d’instrumentation d’un retour de fonction.
- *        Dépile la dernière frame.
- */
-VOID OnRet(THREADID tid)
-{
-    // log_out << "[Backtracer] " << __func__ << " tid=" << tid << std::endl;
-    CallStack *stk = GetTlsStack(tid);
-    if (!stk)
-    {
-        return;
-    }
-    if (!stk->stack.empty())
-    {
-        stk->stack.pop_back();
-    }
-}
 
-/**
- * @brief Lorsqu’on atteint l’instruction cible, génère la backtrace complète une seule fois.
- * @param ip   Adresse de l’instruction instrumentée.
- * @param tid  Identifiant du thread.
- * @param dis  Pointeur vers la chaîne désassemblée (libérée à la fin).
+ * @brief At target instruction: dump registers, leaked bytes, disasm window,
+
+ *        and walk the stack via RSP to find callers.
+
+ * @param ip       Address of the target instruction.
+
+ * @param tid      Thread id.
+
+ * @param instList Disassembly window around the target (freed here).
+
+ * @param ctx      Snapshot context (IARG_CONST_CONTEXT).
+
  */
-VOID Backtrace(ADDRINT ip, THREADID tid, std::vector<char *> *instList)
+
+VOID Backtrace(ADDRINT ip, THREADID tid, std::vector<char *> *instList, const CONTEXT *ctx)
+
 {
-    // log_out << "[Backtracer] " << __func__ << " tid=" << tid << std::endl;
+
     bool expected = false;
+
     if (!logged.compare_exchange_strong(expected, true))
+
     {
-        for (auto p : *instList)
-        {
-            free(p);
-        }
+
+        for (auto p : *instList) free(p);
+
         instList->clear();
-        return; // déjà loggé
+
+        return;
+
     }
+
+
 
     PIN_GetLock(&ioLock, 1);
 
+
+
+    ADDRINT rdi = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RDI);
+
+    ADDRINT rsi = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RSI);
+
+    ADDRINT rdx = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RDX);
+
+    ADDRINT rcx = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RCX);
+
+    ADDRINT r8  = PIN_GetContextReg(ctx, LEVEL_BASE::REG_R8);
+
+    ADDRINT r9  = PIN_GetContextReg(ctx, LEVEL_BASE::REG_R9);
+
+    ADDRINT rsp = PIN_GetContextReg(ctx, LEVEL_BASE::REG_RSP);
+
+
+
+
     PIN_LockClient();
-    RTN rtn = RTN_FindByAddress(ip);
-    std::string currentFunc = RTN_Valid(rtn) ? RTN_Name(rtn) : "<unknown>";
+
+    RTN rtn_cur = RTN_FindByAddress(ip);
+
+    std::string currentFunc = RTN_Valid(rtn_cur) ? RTN_Name(rtn_cur) : "<unknown>";
+
     PIN_UnlockClient();
 
+
+
     std::ostringstream oss;
+
     oss << std::hex << std::setfill('0')
+
         << "Adresse : 0x" << std::setw(16) << ip << "\n"
-        << "Fonction : `" << currentFunc << "`\n";
+
+        << "Fonction : `" << currentFunc << "`\n"
+
+        << "=== Registres au point cible ===\n"
+
+        << "\tRDI = 0x" << std::setw(16) << rdi << "\n"
+
+        << "\tRSI = 0x" << std::setw(16) << rsi << "\n"
+
+        << "\tRDX = 0x" << std::setw(16) << rdx << "\n"
+
+        << "\tRCX = 0x" << std::setw(16) << rcx << "\n"
+
+        << "\tR8  = 0x" << std::setw(16) << r8  << "\n"
+
+        << "\tR9  = 0x" << std::setw(16) << r9  << "\n";
+
+
 
     oss << "===     Fuite    ===\n";
+
     for (auto b : gLeakedBytes)
-    {
-        oss << std::hex << std::setw(2) << std::setfill('0')
-            << uint32_t(b);
-    }
+
+        oss << std::hex << std::setw(2) << std::setfill('0') << uint32_t(b);
+
     oss << std::dec << "\n";
 
+
+
+
     oss << "=== Instructions ===\n";
+
     for (auto disasm_cstr : *instList)
+
     {
+
         if (disasm_cstr == insName)
-        {
+
             oss << "[!] " << disasm_cstr << "\n";
-        }
+
         else
-        {
+
             oss << "\t" << disasm_cstr << "\n";
-        }
+
     }
 
-    oss << "=== Appelant(s)  ===\n";
 
-    auto &stack = GetTlsStack(tid)->stack;
-    for (int i = int(stack.size()) - 1; i >= 0; --i)
+
+    oss << "=== Appelant(s) (stack walk) ===\n";
+
+    PIN_LockClient();
+
+    int frames = 0;
+
+    for (ADDRINT offset = 0; offset < 4096 && frames < 32; offset += 8)
+
     {
-        const Frame &f = stack[i];
-        oss << "  -> " << f.funcName << "\n"
-            << "\tBibliothèque : " << f.libName << "\n"
-            << "\tArguments : \n"
-            << "\tRDI = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[0] << "\n"
-            << "\tRSI = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[1] << "\n"
-            << "\tRDX = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[2] << "\n"
-            << "\tRCX = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[3] << "\n"
-            << "\tR8  = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[4] << "\n"
-            << "\tR9  = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[5] << "\n"
-            << "\tR10  = 0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[6] << "\n";
 
-        // On ne fait ça que si vous voulez vraiment lire un uint64_t
-        uint32_t valRDI = 0, valRSI = 0;
+        ADDRINT candidate = 0;
 
-        // Tente de lire 8 octets à *l’adresse* f.rdi
-        if (ReadMem<uint32_t>(f.regs[0], valRDI))
-        {
-            oss << "\tValeur 32-bits à l'adresse RDI (0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[0]
-                << ") : 0x" << std::hex << std::setw(16) << std::setfill('0') << valRDI << "\n";
-        }
-        else
-        {
-            oss << "\t[Erreur] impossible de lire à l'adresse RDI 0x"
-                << std::hex << f.regs[0] << "\n";
-        }
+        if (PIN_SafeCopy(&candidate, reinterpret_cast<void *>(rsp + offset), 8) != 8) break;
 
-        // Même chose pour RSI
-        if (ReadMem<uint32_t>(f.regs[1], valRSI))
-        {
-            oss << "\tValeur 32-bits à l'adresse RSI (0x" << std::hex << std::setw(16) << std::setfill('0') << f.regs[1]
-                << ") : 0x" << std::hex << std::setw(16) << std::setfill('0') << valRSI << "\n";
-        }
-        else
-        {
-            oss << "\t[Erreur] impossible de lire à l'adresse RSI 0x"
-                << std::hex << f.regs[1] << "\n";
-        }
-        oss << "\n";
+        if (!candidate) continue;
+
+        IMG img = IMG_FindByAddress(candidate);
+
+        if (!IMG_Valid(img)) continue;
+
+        RTN frame_rtn = RTN_FindByAddress(candidate);
+
+        oss << "  [" << std::dec << frames << "] "
+
+            << (RTN_Valid(frame_rtn) ? RTN_Name(frame_rtn) : "<unknown>")
+
+            << " @ 0x" << std::hex << std::setw(16) << std::setfill('0') << candidate
+
+            << "\n\t" << IMG_Name(img) << "\n";
+
+        frames++;
+
     }
 
-    if (stack.empty() || stack.front().funcName != "main")
-    {
-        oss << "  -> main\n";
-    }
+    if (frames == 0) oss << "  (aucun appelant trouve dans la fenetre de stack)\n";
+
+    PIN_UnlockClient();
+
+
 
     key_out << oss.str();
+
     PIN_ReleaseLock(&ioLock);
 
-    for (auto p : *instList)
-    {
-        free(p);
-    }
+
+
+    for (auto p : *instList) free(p);
+
     instList->clear();
+
 }
 
 /**
@@ -407,48 +486,71 @@ VOID LeakSecret(void *ea, THREADID tid)
  *        - INS_IsRet   → OnRet
  *        - INS_Address == insAddress → Backtrace
  */
+/**
+
+ * @brief Instrument each instruction: collect disasm window around target,
+
+ *        insert LeakSecret and Backtrace hooks at insAddress.
+
+ *        No CALL/RET tracking -- avoids NtContinue crashes with SChannel.
+
+ */
+
 VOID Instruction(INS ins, VOID *)
+
 {
+
     ADDRINT addr = INS_Address(ins);
 
-    if (INS_IsCall(ins))
+
+
+    // Leak the secret bytes at the target address
+
+    if (addr == insAddress && gLeakedBytes.size() < (size_t)SECRET_LEN)
+
     {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)OnCall,
-                       IARG_BRANCH_TARGET_ADDR, IARG_THREAD_ID,
-                       IARG_CONTEXT, IARG_END);
-    }
-    else if (INS_IsRet(ins))
-    {
-        INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)OnRet,
-                       IARG_THREAD_ID, IARG_END);
+
+        INS_InsertPredicatedCall(ins, IPOINT_BEFORE, AFUNPTR(LeakSecret),
+
+                                 IARG_MEMORYREAD_EA, IARG_THREAD_ID, IARG_END);
+
     }
 
-    // --- hook de la fuite d’octet ---
-    if (addr == insAddress && gLeakedBytes.size() < SECRET_LEN)
-    {
-        log_out << "[Backtracer] DEBUG: Inserting LeakSecret call at address: 0x" << std::hex << addr << std::dec << std::endl;
-        INS_InsertPredicatedCall(
-            ins, IPOINT_BEFORE, AFUNPTR(LeakSecret),
-            IARG_MEMORYREAD_EA,
-            IARG_THREAD_ID,
-            IARG_END);
-    }
 
-    // --- hook de l’instruction cible ---
-    if (addr >= insAddress - RANGE_BEFORE && addr <= insAddress + RANGE_AFTER)
+
+    // Collect disasm window and fire Backtrace once
+
+    if (insAddress > 0 &&
+
+        addr >= insAddress - RANGE_BEFORE &&
+
+        addr <= insAddress + RANGE_AFTER)
+
     {
+
         char *disasm_cstr = strdup(INS_Disassemble(ins).c_str());
+
         gInstList.push_back(disasm_cstr);
 
+
+
         if (addr == insAddress)
+
         {
-            // On a atteint l'instruction cible
+
             INS_InsertCall(ins, IPOINT_BEFORE, (AFUNPTR)Backtrace,
+
                            IARG_INST_PTR, IARG_THREAD_ID,
+
                            IARG_PTR, &gInstList,
+
+                           IARG_CONST_CONTEXT,
                            IARG_END);
+
         }
+
     }
+
 }
 
 /**
@@ -489,14 +591,10 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    tlsKey = PIN_CreateThreadDataKey(nullptr);
-
     PIN_InitLock(&ioLock);
 
-    PIN_AddThreadStartFunction(ThreadStart, nullptr);
-    PIN_AddThreadFiniFunction(ThreadFini, nullptr);
-
     LoadResultAnalyse("data/log/getName.log");
+    load_filter_config_backtracer(KnobConfigFile.Value());
 
     INS_AddInstrumentFunction(Instruction, 0);
     IMG_AddInstrumentFunction(ImageLoad, 0);

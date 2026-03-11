@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-Script pour reconstruire ssl-key.log à partir de backtrace_leaks.log
-SANS avoir besoin de SSLKEYLOGFILE.
+reconstruct_keylog.py — curl + OpenSSL 3.x UNIQUEMENT
+======================================================
+Reconstruit ssl-key.log à partir de backtrace_leaks.log SANS avoir besoin
+de SSLKEYLOGFILE.
 
-Les positions des secrets TLS sont FIXES pour curl + OpenSSL 3.x + TLS 1.3:
-  - Position 11: SERVER_HANDSHAKE_TRAFFIC_SECRET
-  - Position 30: SERVER_TRAFFIC_SECRET_0
-  - Position 36: EXPORTER_SECRET
-  - Position 39: CLIENT_HANDSHAKE_TRAFFIC_SECRET
-  - Position 53: CLIENT_TRAFFIC_SECRET_0
+⚠️  Ce script est SPÉCIFIQUE à curl compilé avec OpenSSL 3.x (libcrypto-3-x64.dll).
+    Pour curl SChannel (bcryptprimitives.dll), utiliser reconstruct_keylog_schannel.py.
+
+Hypothèses OpenSSL 3.x + TLS 1.3 :
+  - Candidat : libcrypto-3-x64.dll delta 3656159 (SHA384_Final)
+  - Les leaks sont en big-endian → conversion little-endian par blocs de 8 octets
+  - Les positions des secrets sont FIXES sur 61 leaks :
+      Position 11 → SERVER_HANDSHAKE_TRAFFIC_SECRET
+      Position 30 → SERVER_TRAFFIC_SECRET_0
+      Position 36 → EXPORTER_SECRET
+      Position 39 → CLIENT_HANDSHAKE_TRAFFIC_SECRET
+      Position 53 → CLIENT_TRAFFIC_SECRET_0
 
 Usage:
   python reconstruct_keylog.py -i Data/log/backtrace_leaks.log -o Data/reconstructed.log
@@ -75,7 +83,9 @@ def reconstruct_ssl_keylog(leaks: list, client_random: str = None) -> list:
     return lines
 
 def main():
-    parser = argparse.ArgumentParser(description="Reconstruit ssl-key.log à partir des leaks")
+    parser = argparse.ArgumentParser(
+        description="Reconstruit ssl-key.log à partir des leaks (curl + OpenSSL 3.x uniquement)"
+    )
     parser.add_argument("-i", "--input", type=Path, default=Path("Data/log/backtrace_leaks.log"))
     parser.add_argument("-o", "--output", type=Path, default=Path("Data/reconstructed-ssl-key.log"))
     parser.add_argument("-r", "--client-random", type=str, default=None)
