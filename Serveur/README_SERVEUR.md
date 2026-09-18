@@ -1,5 +1,10 @@
 # Guide d'utilisation du serveur HTTPS avec SSLKEYLOGFILE
 
+Le serveur est le point de controle de reference sous OpenSSL pour Windows.
+Le client, notamment `curl_schannel.exe`, n'a pas besoin de definir
+`SSLKEYLOGFILE`; on definit cette variable dans le terminal qui lance le
+serveur, puis on recupere le fichier de cles apres la requete.
+
 ## 📋 Prérequis
 
 - Python 3.8+ avec OpenSSL 1.1.1+
@@ -19,8 +24,8 @@ start_server.bat
 
 ### Option 3: Lancement manuel
 ```powershell
-# Définir la variable d'environnement
-$env:SSLKEYLOGFILE = "server_keys.log"
+# Définir la variable d'environnement dans le terminal du serveur
+$env:SSLKEYLOGFILE = "$PWD\server_keys.log"
 
 # Lancer le serveur
 python serveur.py

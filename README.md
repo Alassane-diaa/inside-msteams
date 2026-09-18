@@ -1,9 +1,11 @@
-# Inside MS Teams
+## Reproduire les expériences
 
-## Journal de bord
-- ...
-- 27/12/2025 : J'ai recommencé pour extraire la clé privée en exécutant curl. Il faut avoir la version sous OpenSSL, qui n'est pas la version par défaut sous Windows. 
-- 28/12/2025 : Adaptation du tracebuilder et de l'analyseur pour qu'il prenne en compte les spécificités de Windows. Mais il y a un problème qui génère l'erreur : curl: (35) Send failure: Connection was aborted. Donc curl n'arrive jamais au bout de son exécution et ne renvoie pas la page. Par conséquent je n'avais pas de candidat lorsque je faisais l'analyse.
-- 01/01/2026 : J'ai d'abord pensé à augmenter le --max-time et --connection-time de curl mais cela ne résolvait pas le problème. J'ai par conséquent ajouté un filtre et changé des bouts de l'implémentation de tracebuilder sans pour autant changer la logique du code. J'ai toujours l'erreur.
-- 02/01/2026 : J'arrive quand même à trouver un candidat en faisant l'analyse sur la trace collectée (3.63 GB). Je n'avais pas la lib et le delta initialement (None, Inf), mais avec quelques modifications sur io_utils.py , on les retrouve bien dans libssl
-- 04/01/2026 : J'ai refais toutes ces étapes plusieurs fois pour vérifier que j'avais toujours la même lib et le même delta pour les clés. Après j'ai adapté le code de PinGetName pour avoir la fonction précise de cette lib et l'instruction qui manipule la clé. Ensuite, j'ai adapté le backtracer et j'ai comparé sa sortie avec ce qui est capturé par la variable locale et ça correspond bien tout le temps aux bons secrets.
+Consulter [EXPERIMENTS_WINDOWS.md](EXPERIMENTS_WINDOWS.md) pour la procédure
+Windows complète : dépendances, chemins configurables de Pin et du compilateur,
+compilation des variantes TraceBuilder, analyse, backtrace, serveur HTTPS local,
+Wireshark et reconstruction des clés TLS.
+
+Les commandes sont relatives à la racine du dépôt. Définir `PIN_ROOT` vers le
+dossier Intel Pin installé sur la machine au lieu de copier un chemin absolu
+provenant d'un autre ordinateur.
+

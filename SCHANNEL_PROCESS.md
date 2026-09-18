@@ -43,12 +43,12 @@ afin de déchiffrer le trafic réseau dans Wireshark.
 
 ## 📦 Prérequis
 
-- **Pin** : `C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows`
+- **Pin** : configure the extracted kit with `$env:PIN_ROOT` as described in [EXPERIMENTS_WINDOWS.md](EXPERIMENTS_WINDOWS.md).
 - **Cible** : `Cible/curl_schannel.exe` (curl compilé avec SChannel, pas OpenSSL)
 - **Serveur HTTPS local** : `Serveur/serveur.py` sur `https://localhost:4443`
   (certificat auto-signé → flag `-k` nécessaire)
 - **`pin_config.ini`** configuré pour SChannel (voir ci-dessous)
-- **Pintools compilés** : `Pintools/MyPintool/obj-intel64/*.dll`
+- **Pintools compilés** : `Pintools/obj-intel64/*.dll`
 
 ---
 
@@ -79,8 +79,14 @@ COMMAND=SERVER_TRAFFIC_SECRET_0
 ### Étape 0 : Compiler les Pintools
 
 ```powershell
-cd Pintools/MyPintool
+cd Pintools
+
+# Tout compiler
 .\build.bat
+
+# Ou compiler une seule cible (ex: TraceBuilder, TraceBuilder_Delayed, TraceBuilder_FuncEntry)
+.\build.bat TraceBuilder
+
 cd ../..
 ```
 
@@ -102,8 +108,8 @@ Le serveur écoute sur `https://localhost:4443` avec le certificat
 ### Étape 2 : Lancer TraceBuilder
 
 ```powershell
-$PIN_TOOL = "C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\TraceBuilder.dll" `
+$PIN_TOOL = $env:PIN_ROOT
+& "$PIN_TOOL\pin.exe" -t "Pintools\obj-intel64\TraceBuilder.dll" `
     -config Scripts/pin_config.ini `
     -- Cible/curl_schannel.exe -k https://localhost:4443
 ```
@@ -131,8 +137,8 @@ Reg: MEMORY32 Lib: bcryptprimitives.dll Delta: 41714
 ### Étape 4 : PinGetName (obtenir le nom de l'instruction)
 
 ```powershell
-$PIN_TOOL = "C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\PinGetName.dll" `
+$PIN_TOOL = $env:PIN_ROOT
+& "$PIN_TOOL\pin.exe" -t "Pintools\obj-intel64\PinGetName.dll" `
     -config Scripts/pin_config.ini `
     -- Cible/curl_schannel.exe -k https://localhost:4443
 ```
@@ -156,8 +162,8 @@ Instruction: movdqu xmm0, xmmword ptr [rcx+rax*8]
 ### Étape 5 : Backtracer (capturer les secrets)
 
 ```powershell
-$PIN_TOOL = "C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
-& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\Backtracer.dll" `
+$PIN_TOOL = $env:PIN_ROOT
+& "$PIN_TOOL\pin.exe" -t "Pintools\obj-intel64\Backtracer.dll" `
     -config Scripts/pin_config.ini `
     -- Cible/curl_schannel.exe -k https://localhost:4443
 ```
@@ -249,10 +255,10 @@ EXPORTER_SECRET         <client_random> <48_bytes_hex>
 python Serveur/serveur.py
 
 # Terminal 2 — dans le répertoire du projet
-$PIN_TOOL = "C:\Users\diala\Downloads\pin-external-4.0-99633-g5ca9893f2-clang-windows"
+$PIN_TOOL = $env:PIN_ROOT
 
 # 1. Backtracer (capture les secrets)
-& "$PIN_TOOL\pin.exe" -t "Pintools\MyPintool\obj-intel64\Backtracer.dll" `
+& "$PIN_TOOL\pin.exe" -t "Pintools\obj-intel64\Backtracer.dll" `
     -config Scripts/pin_config.ini `
     -- Cible/curl_schannel.exe -k https://localhost:4443
 

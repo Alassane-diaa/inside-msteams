@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 # 1. Configuration du fichier de log des clés
-KEYLOG_FILE = "server_keys.log"
+KEYLOG_FILE = os.environ.get("SSLKEYLOGFILE", "server_keys.log")
 SERVER_CERT = "server.crt"
 SERVER_KEY = "server.key"
 SERVER_PORT = 4443
